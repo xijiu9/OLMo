@@ -46,6 +46,8 @@ from olmo.util import (
     prepare_cli_environment,
 )
 
+from coat.activation.models.coat_olmo import CoatOLMo
+
 log = logging.getLogger("train")
 
 
@@ -127,7 +129,21 @@ def main(cfg: TrainConfig) -> None:
 
     # Initialize the model.
     log.info("Building model...")
-    olmo_model = OLMo(cfg.model)
+    if cfg.quantize_model.use_quantize_model == "coat_real":
+        assert cfg.quantize_model.group_size > 0, "The quantization group size should be a positive integer"
+        log.info(f"The Quantization Group Size of the Model: {cfg.quantize_model.group_size}")
+        olmo_model = CoatOLMo(cfg.model, cfg.quantize_model)
+        for name, module in olmo_model.named_modules():
+            module.layer_name = name
+    elif cfg.quantize_model.use_quantize_model == "fp8linear":
+        import os
+        os.environ["COAT_FP8Linear"] = "true" # I do not want to pass a new argument to OLMo... device="meta" so can not apply linear_replacer
+        os.environ["FABIT_FP8Linear"] = cfg.quantize_model.fabit
+        os.environ["FWBIT_FP8Linear"] = cfg.quantize_model.fwbit
+        os.environ["BOBIT_FP8Linear"] = cfg.quantize_model.bobit
+        olmo_model = OLMo(cfg.model)
+    else:
+        olmo_model = OLMo(cfg.model)
     log.info(f"Total number of parameters: {olmo_model.num_params():,d}")
     log.info(f"Number of non-embedding parameters: {olmo_model.num_params(include_embedding=False):,d}")
     log.info(f"Peak GPU Memory (MB) before {cfg.distributed_strategy}: {int(peak_gpu_memory() or 0)}")

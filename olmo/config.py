@@ -101,9 +101,17 @@ class BaseConfig:
             else:
                 return str(latest_checkpoint)
 
+        def path_check_exist(path):
+            import os
+            if os.path.exists(path):
+                return path
+            else:
+                return None
+    
         om.register_new_resolver("path.glob", path_glob, replace=True)
         om.register_new_resolver("path.choose", path_choose, replace=True)
         om.register_new_resolver("path.last_checkpoint", path_last_checkpoint, replace=True)
+        om.register_new_resolver("path.check_exist", path_check_exist, replace=True)
 
     @classmethod
     def update_legacy_settings(cls, config: D) -> D:
@@ -498,6 +506,7 @@ class ModelConfig(BaseConfig):
 class OptimizerType(StrEnum):
     lionw = "lionw"
     adamw = "adamw"
+    coat_fp8_adamw = "coat_fp8_adamw"
 
 
 @dataclass
@@ -868,6 +877,181 @@ class ActivationCheckpointingStrategy(StrEnum):
     Focus checkpointing on where it is cheap to recompute and saves most memory.
     """
 
+@dataclass
+class QuantActivationConfig(BaseConfig):
+    """
+    Quantization for model configuration.
+    """
+
+    # Quantization Related
+    use_quantize_model: Optional[str] = None
+    """
+    Whether to use CoatOLMo to train. choices: ["coat_adamw"]
+    """
+
+    Ubit: Optional[str] = "100"
+    """
+    Bit width of fa, fw, ba, bw
+    When it is set to 100, it mean does not apply quantization.
+    """
+
+    fabit: Optional[str] = "100"
+    """
+    Bit width of forward activation.
+    """
+
+    fwbit: Optional[str]= "100"
+    """
+    Bit width of forward weight
+    """
+
+    fobit: Optional[str]= "100"
+    """
+    Bit width of forward linear layer output
+    """
+
+    babit: Optional[str] = "100"
+    """
+    Bit width of backward activation
+    """
+
+    bwbit: Optional[str]= "100"
+    """
+    Bit width of backward weight
+    """
+
+    bobit: Optional[str]= "100"
+    """
+    Bit width of backward linear layer output
+    """
+
+    weight_memory_efficient: Optional[bool] = False
+    """
+    Whether to save weight_fp8 and weight_fp8_t in the first microbatch. Useful when gradient accumulation is applied
+    """
+
+    group_size: Optional[int] = 16
+    """
+    The quantization group size of non-linear layers.
+    """
+
+    # ========================== Fake Quantization Related Arguments ==========================
+    row_blocksize: Optional[int] = 32
+    """
+    Row block size of block quantization
+    """
+
+    col_blocksize: Optional[int] = 32
+    """
+    Col block size of block quantization
+    """
+
+    min_blockunit_row: Optional[int] = 1
+    """
+    Minimum block unit for row axis for refine attention and mlp. Also useful for backward size match.
+    """
+
+    min_blockunit_col: Optional[int] = 16
+    """
+    Minimum block unit for col axis for refine attention and mlp. Also useful for backward size match.
+    """
+
+    epsilon: Optional[float] = 1e-10
+    """
+    Prevent the scale to overflow to inf. Prevent the max value of a tensor is too small.
+    """
+
+    qchoice: Optional[list[str]] = None
+    """
+    What part of the QOLMo to be quantized
+    """
+
+    refine_attn_blocksize: Optional[bool] = False
+    """
+    Leave some part of the attention module in hight
+    """
+
+    refine_mlp_blocksize: Optional[bool] = False
+    """
+    Leave some part of the mlp module in hight
+    """
+    
+    refine_row_blocksize: Optional[int] = 1
+    """
+    Refine the block size 
+    """
+
+    refine_col_blocksize: Optional[int] = 16
+    """
+    Refine the block size 
+    """
+    # ========================== Fake Quantization Related Arguments Ends ==========================
+
+
+@dataclass
+class QuantOptimizerConfig(BaseConfig):
+    """
+    Quantization for model configuration.
+    """
+
+    # Quantization Related
+    use_quantize_optimizer: Optional[str] = None
+    """
+    Whether to use QOLMo to train
+    """
+
+    qgroup_size: Optional[int] = 128
+    """
+    The quantization group size of optimizer states.
+    """
+
+    expand_min: Optional[int] = 16
+    """
+    The granularity of the k when doing expansion.
+    """
+
+    first_order_bit: Optional[str] = "E4M3"
+    """
+    Quantize the first order momentum
+    """
+
+    first_order_expansion: Optional[str] = None
+    """
+    Use origin tensor to quantize, or to apply dynamic range expansion to first order momentum.
+    """
+
+    second_order_bit: Optional[str] = "E4M3"
+    """
+    Quantize the second order momentum
+    """
+
+    second_order_expansion: Optional[str] = None
+    """
+    Use origin tensor to quantize, or to apply dynamic range expansion to first order momentum.
+    """
+
+    epsilon: Optional[float] = 1e-15
+    """
+    "Quantization epsilon to prevent all zero cases.
+    """
+    
+    # ========================== Fake Quantization Related Arguments Ends ==========================
+
+    row_blocksize: Optional[int] = 1
+    """
+    Row block size of block quantization
+    """
+
+    col_blocksize: Optional[int] = 128
+    """
+    Col block size of block quantization
+    """
+
+    pad_block: Optional[bool] = False
+    """
+    Pad the quantization block to avoid error during block cut
+    """
+
 
 @dataclass
 class TrainConfig(BaseConfig):
@@ -903,6 +1087,16 @@ class TrainConfig(BaseConfig):
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     """
     Optimizer configuration.
+    """
+
+    quantize_model: QuantActivationConfig = field(default_factory=QuantActivationConfig)
+    """
+    Quantization configuration
+    """
+
+    quantize_optimizer: QuantOptimizerConfig = field(default_factory=QuantOptimizerConfig)
+    """
+    Quantization optimizer configuration
     """
 
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)

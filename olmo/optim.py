@@ -646,6 +646,29 @@ class AdamW(torch.optim.AdamW, Optimizer):
             self._step_size_maxs = None
             return metrics
 
+try:
+    from coat.optimizer.fp8_adamw import CoatAdamW
+    
+    class CoatOLMoAdamW(CoatAdamW, Optimizer):
+        def __init__(
+            self,
+            qargs,
+            params,
+            lr: float = 1e-3,
+            betas: Tuple[float, float] = (0.9, 0.999),
+            eps: float = 1e-8,
+            weight_decay: float = 1e-2,
+            amsgrad: bool = False,
+            *,
+            fused: Optional[bool] = None,
+        ):
+            CoatAdamW.__init__(self, qargs, params, lr, betas, eps, weight_decay, amsgrad)
+        
+        step = CoatAdamW.step
+except:
+    pass
+
+
 
 @dataclass
 class Scheduler(metaclass=ABCMeta):
@@ -941,15 +964,25 @@ def build_optimizer(cfg: TrainConfig, model: nn.Module) -> Optimizer:
             selective_updates=cfg.optimizer.selective_updates,
         )
     elif cfg.optimizer.name == OptimizerType.adamw:
-        return AdamW(
-            param_groups,
-            lr=cfg.optimizer.learning_rate,
-            betas=cfg.optimizer.betas,
-            weight_decay=cfg.optimizer.weight_decay,
-            record_update_metrics=cfg.optimizer.record_update_metrics,
-            selective_updates=cfg.optimizer.selective_updates,
-            eps=cfg.optimizer.eps,
-        )
+        if cfg.quantize_optimizer.use_quantize_optimizer == OptimizerType.coat_fp8_adamw:
+            return CoatOLMoAdamW(
+                cfg.quantize_optimizer,
+                param_groups,
+                lr=cfg.optimizer.learning_rate,
+                betas=cfg.optimizer.betas,
+                weight_decay=cfg.optimizer.weight_decay,
+                eps=cfg.optimizer.eps,
+            )
+        else:
+            return AdamW(
+                param_groups,
+                lr=cfg.optimizer.learning_rate,
+                betas=cfg.optimizer.betas,
+                weight_decay=cfg.optimizer.weight_decay,
+                record_update_metrics=cfg.optimizer.record_update_metrics,
+                selective_updates=cfg.optimizer.selective_updates,
+                eps=cfg.optimizer.eps,
+            )
     else:
         raise NotImplementedError
 

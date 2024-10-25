@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import sys
+import os
 from abc import abstractmethod
 from collections import defaultdict
 from functools import partial
@@ -444,17 +445,32 @@ class OLMoBlock(nn.Module):
         assert (self.act.output_multiplier * self.hidden_size) % 1 == 0
 
         # Attention output projection.
-        self.attn_out = nn.Linear(
-            config.d_model, config.d_model, bias=config.include_bias, device=config.init_device
-        )
+        if os.environ.get("COAT_FP8Linear", "false") == "true":
+            from coat.activation.real_quantization.fp8linear import FP8Linear
+            self.attn_out = FP8Linear(
+                config.d_model, config.d_model, bias=config.include_bias, device=config.init_device, layer_idx=layer_id
+            )
 
-        # Feed-forward output projection.
-        self.ff_out = nn.Linear(
-            int(self.act.output_multiplier * self.hidden_size),
-            config.d_model,
-            bias=config.include_bias,
-            device=config.init_device,
-        )
+            # Feed-forward output projection.
+            self.ff_out = FP8Linear(
+                int(self.act.output_multiplier * self.hidden_size),
+                config.d_model,
+                bias=config.include_bias,
+                device=config.init_device,
+                layer_idx=layer_id
+            )
+        else:
+            self.attn_out = nn.Linear(
+                config.d_model, config.d_model, bias=config.include_bias, device=config.init_device
+            )
+
+            # Feed-forward output projection.
+            self.ff_out = nn.Linear(
+                int(self.act.output_multiplier * self.hidden_size),
+                config.d_model,
+                bias=config.include_bias,
+                device=config.init_device,
+            )
         self.ff_out._is_residual = True  # type: ignore
 
         # Rotary embeddings.
@@ -685,13 +701,23 @@ class OLMoSequentialBlock(OLMoBlock):
             config.effective_n_kv_heads * head_dim,
             config.effective_n_kv_heads * head_dim,
         )
-        self.att_proj = nn.Linear(
-            config.d_model, sum(self.fused_dims), bias=config.include_bias, device=config.init_device
-        )
-        # Feed-forward input projection.
-        self.ff_proj = nn.Linear(
-            config.d_model, self.hidden_size, bias=config.include_bias, device=config.init_device
-        )
+        if os.environ.get("COAT_FP8Linear", "false") == "true":
+            from coat.activation.real_quantization.fp8linear import FP8Linear
+            self.att_proj = FP8Linear(
+                config.d_model, sum(self.fused_dims), bias=config.include_bias, device=config.init_device, layer_idx=layer_id
+            )
+            # Feed-forward input projection.
+            self.ff_proj = FP8Linear(
+                config.d_model, self.hidden_size, bias=config.include_bias, device=config.init_device, layer_idx=layer_id
+            )
+        else:
+            self.att_proj = nn.Linear(
+                config.d_model, sum(self.fused_dims), bias=config.include_bias, device=config.init_device
+            )
+            # Feed-forward input projection.
+            self.ff_proj = nn.Linear(
+                config.d_model, self.hidden_size, bias=config.include_bias, device=config.init_device
+            )
 
         # Layer norms.
         self.attn_norm = LayerNorm.build(config, size=config.d_model)

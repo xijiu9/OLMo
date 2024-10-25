@@ -780,6 +780,19 @@ class Trainer:
         num_micro_batches = len(micro_batches)
 
         for micro_batch_idx, micro_batch in enumerate(micro_batches):
+            if self.cfg.quantize_model.use_quantize_model == "coat_real":
+                from coat.activation.models._fp8manager import FP8Manager
+                if micro_batch_idx == 0:
+                    FP8Manager.is_first_microbatch = True
+                else:
+                    FP8Manager.is_first_microbatch = False
+            
+            if os.environ.get("MEMORY_BENCH", "false") in ["1", "true", "True"]:
+                if get_global_rank() == 0:
+                    from coat.activation.utils import record_memory_allocated
+                    memory_usage = torch.cuda.memory_allocated() / 1024 ** 2
+                    record_memory_allocated["Before OLMo Step Forward"].append(memory_usage)
+                    
             # setup sync context for DDP for all micro-batches except the last
             grad_sync_context = nullcontext
             if (
@@ -802,6 +815,12 @@ class Trainer:
                     # Update overall CE batch loss.
                     ce_batch_loss += ce_loss.detach()
 
+                    if os.environ.get("MEMORY_BENCH", "false") in ["1", "true", "True"]:
+                        if get_global_rank() == 0:
+                            from coat.activation.utils import record_memory_allocated
+                            memory_usage = torch.cuda.memory_allocated() / 1024 ** 2
+                            record_memory_allocated["After OLMo Step Forward"].append(memory_usage)
+                            
                     # Update overall Z batch loss.
                     if z_loss is not None:
                         assert z_batch_loss is not None
@@ -810,6 +829,12 @@ class Trainer:
                 # Run backward pass.
                 loss.backward()
 
+                if os.environ.get("MEMORY_BENCH", "false") in ["1", "true", "True"]:
+                    if get_global_rank() == 0:
+                        from coat.activation.utils import record_memory_allocated
+                        memory_usage = torch.cuda.memory_allocated() / 1024 ** 2
+                        record_memory_allocated["After OLMo Backward"].append(memory_usage)
+                        
             # Remove output hooks
             for hook in output_hooks:
                 hook.remove()
@@ -831,11 +856,22 @@ class Trainer:
         # Zero-gradients.
         self.optim.zero_grad(set_to_none=True)
 
+        if os.environ.get("MEMORY_BENCH", "false") in ["1", "true", "True"]:
+            if get_global_rank() == 0:
+                from coat.activation.utils import record_memory_allocated
+                memory_usage = torch.cuda.memory_allocated() / 1024 ** 2
+                record_memory_allocated["Before OLMo Batch"].append(memory_usage)
         # Move tensors to the right device.
         batch = move_to_device(batch, self.device)
 
         # Run forward-backward pass.
         ce_batch_loss, z_batch_loss = self.train_batch(batch)
+
+        if os.environ.get("MEMORY_BENCH", "false") in ["1", "true", "True"]:
+            if get_global_rank() == 0:
+                from coat.activation.utils import record_memory_allocated
+                memory_usage = torch.cuda.memory_allocated() / 1024 ** 2
+                record_memory_allocated["After OLMo Batch"].append(memory_usage)
 
         # Collect loss, potentially reducing over all ranks.
         if reduce_global_loss:
@@ -1208,6 +1244,33 @@ class Trainer:
                     # Run train step on batch.
                     metrics = self.train_step(batch, reduce_global_loss=should_log_this_step)
 
+                    if self.global_step == 10:
+                        if os.environ.get("MEMORY_BENCH", "false") in ["1", "true", "True"]:
+                            peak_memory = peak_gpu_memory()
+                            if get_global_rank() == 0:
+                                print("[MEMORY BENCH] We collect the statistics for 10 steps")
+                                from coat.activation.utils import record_memory_allocated
+
+                                total_memory = record_memory_allocated["After OLMo Step Forward"][-1]
+                                model_memory = record_memory_allocated["Before OLMo Batch"][0]
+                                activation_memory = record_memory_allocated["After OLMo Step Forward"][0] - record_memory_allocated["Before OLMo Step Forward"][0]
+                                optimizer_memory = record_memory_allocated["After OLMo Batch"][1] - record_memory_allocated["After OLMo Batch"][0]
+                                gradient_memory = record_memory_allocated["After OLMo Step Forward"][-1] - \
+                                    record_memory_allocated["After OLMo Step Forward"][-len(record_memory_allocated["After OLMo Step Forward"]) // 10] # This actually means the gradient accumulation step
+                                
+                                assert math.isclose(total_memory, model_memory + activation_memory + optimizer_memory + gradient_memory, rel_tol=1e-2, abs_tol=100), "The calculated memory consumption does not match with actual memory consumption!"
+                                print(f"\n\nPeak Memory Usage  : {peak_memory:.1f} MB\n"
+                                      f"Activation Memory  : {activation_memory:.1f} MB\n"
+                                      f" Optimizer Memory  : {optimizer_memory:.1f} MB\n"
+                                      f"     Model Memory  : {model_memory:.1f} MB\n"
+                                      f"  Gradient Memory  : {gradient_memory:.1f} MB\n")
+                            exit(0)
+                        
+                        if os.environ.get("SPEED_BENCH", "false") in ["1", "true", "True"]:
+                            if get_global_rank() == 0:
+                                print("[SPEED BENCH] We collect the statistics for 10 steps. Please refer to the log above to find the token/s result.")
+                            exit(0)
+                            
                     # Maybe collect other metrics.
                     if should_log_this_step:
                         # Speed metrics.
